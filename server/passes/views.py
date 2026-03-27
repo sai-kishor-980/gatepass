@@ -171,11 +171,12 @@ def promote_semester(request, semester: int, data: PromoteSchema):
         print("ERROR:", e)
         return f"Error: {str(e)}"
 
-@api.get("/isvalid", auth=Auth(), response={200: Result, 404: Result})
+@api.get("//isvalid", auth=Auth(), response={200: Result, 404: Result})
 def is_valid(request: HttpRequest, rollno: str):
     result = Result(success=True, msg="")
     today = datetime.now()
     try:
+        print(1)
         if len(rollno)!=10:
             admn_re = r"[0-9]{2}BD[158]A[0-9]{2}[A-HJ-NP-RT-Z0-9]{2}"
             roll_re = r"\b\d{5}\b"
@@ -197,9 +198,9 @@ def is_valid(request: HttpRequest, rollno: str):
         result.success=False
         return result
     resPass = IssuedPass.objects.filter(
-        roll_no=rollno, valid_till__gt= today.strftime("%Y-%m-%d %H:%M:%S"),active=True
+        roll_no=std.kmitrollno, valid_till__gt= today.strftime("%Y-%m-%d %H:%M:%S"),active=True
     ).order_by("-valid_till").first()
-
+    
     if not resPass:
         result.success = False
         result.msg = "No passes found."
@@ -210,7 +211,7 @@ def is_valid(request: HttpRequest, rollno: str):
         return result
     
     if resPass.pass_type == "alumni" or resPass.pass_type == "one_time":
-        result.msg = f"Roll No. {rollno} has valid pass."
+        result.msg = f"Roll No. {std.kmitrollno} has valid pass."
         return result
     sem = Semester.objects.filter(semester=std.semester).first()
     

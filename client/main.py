@@ -165,7 +165,7 @@ class MainWin(QMainWindow):
                 model.item(2).setEnabled(True) 
         if active:
             self.details.setText(
-            f"##### Name:\n### {student_details['name']}\n---\n#### Section: {student_details['dept']}-{student_details['section']}\n#### Year: {student_details['year']}\n#### Semester: {student_details['semester']}"
+            f"##### Name:\n### {student_details['name']}\n---\n#### Admn Number: {student_details['rollno']}\n#### Section: {student_details['dept']}-{student_details['section']}\n#### Year: {student_details['year']}\n#### Semester: {student_details['semester']}"
             )
         else:
             self.details.setText(
@@ -185,11 +185,26 @@ class MainWin(QMainWindow):
     def setupOptions(self):
         settingsMenu = QMenu(self)
         # settingsMenu.addAction("Set Lunch time", self.setLunchTime)
-        settingsMenu.addAction("Issue History", self.dlGenerationHistory)
-        settingsMenu.addAction("Scan History", self.dlScanningHistory)
-        settingsMenu.addAction("Latecomers data", self.getLatecomersData)
-        settingsMenu.addAction("Promote Semester",self.promoteSemester)
-        settingsMenu.addAction("Edit Semester Details",self.updateSemester)
+        self.issueHistoryAction = QAction("Issue History", self)
+        self.issueHistoryAction.triggered.connect(self.dlGenerationHistory)
+
+        settingsMenu.addAction(self.issueHistoryAction)
+        # settingsMenu.addAction("Issue History", self.dlGenerationHistory)
+        self.scanHistoryAction = QAction("Scan History", self)
+        self.scanHistoryAction.triggered.connect(self.dlScanningHistory)
+        settingsMenu.addAction(self.scanHistoryAction)
+        
+        self.getLateAction = QAction("Get Latecomers Data",self)
+        self.getLateAction.triggered.connect(self.getLatecomersData)
+        settingsMenu.addAction(self.getLateAction)
+
+        self.promoteAction = QAction("Promote Semester",self)
+        self.promoteAction.triggered.connect(self.promoteSemester)
+        settingsMenu.addAction(self.promoteAction)
+
+        self.updateAction = QAction("Edit Semester Details",self)
+        self.updateAction.triggered.connect(self.updateSemester)
+        settingsMenu.addAction(self.updateAction)
 
         self.Tools.setMenu(settingsMenu)
         self.Tools.setDefaultAction(QAction(self))

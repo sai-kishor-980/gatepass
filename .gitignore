@@ -14,10 +14,6 @@ srvrcfg.py
 server/students_2023_2024.json
 server/students copy.json
 studentImages
-server/db.sqlite3.2025-02-25
-server/db.sqlite3.bk
-server/db.sqlite3.missing
-server/db.sqlite3.temp
 log.txt
 server/*.json
 server/read.py
