@@ -10,28 +10,37 @@ from passes.models import (
     ReqLunchTiming,
     ResStudent,
     Result,
-    LunchTiming,
-    Student
+    Student,
+    Semester,
+    PromoteSchema,
+    Logging 
 )
+import re
 import os
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta,time
 from dateutil.relativedelta import relativedelta
 import pytz
 from typing import List
 import requests
-
+from latecomers.models import Latecomers
 from passes import utlis
 from server.utlis import Auth
 
-api = NinjaAPI()
+from django.db import transaction
+
+api = NinjaAPI(urls_namespace="passes",version="2.0.0")
 
 
 @api.post("/gen_pass", auth=Auth())
 def gen_pass(request: HttpRequest, reqPass: ReqPass):
     today = datetime.now()
-
+    std = Student.objects.filter(kmitrollno=reqPass.roll_no).first()
+    if not std:
+        return HttpResponse(
+            f"No Student Found with that Roll Number"
+        )
     valid_passes = IssuedPass.objects.filter(
-        roll_no=reqPass.roll_no, valid_till__gt=int(today.timestamp())
+        roll_no=reqPass.roll_no, valid_till__gte=today.strftime("%Y-%m-%d %H:%M:%S")
     )
 
     passCount = valid_passes.filter(pass_type=reqPass.pass_type).count()
@@ -43,70 +52,159 @@ def gen_pass(request: HttpRequest, reqPass: ReqPass):
 
     valid_till = today
     if reqPass.pass_type == "one_time":
-        valid_till = today + timedelta(days=1)
+        valid_till = datetime.combine(today.date(), time(16, 30))
     if reqPass.pass_type == "daily":
         valid_till = today + relativedelta(months=6)
     if reqPass.pass_type == "alumni":
         valid_till = today + relativedelta(years=70)
     if reqPass.pass_type == "namaaz":
-        valid_till = today + timedelta(days=1)
+        valid_till = datetime.combine(today.date(), time(16, 30))
 
     IssuedPass.objects.create(
         roll_no=reqPass.roll_no,
         pass_type=reqPass.pass_type,
-        issues_date=int(today.timestamp()),
-        valid_till=int(valid_till.timestamp()),
-    )
+        semester=std.semester,
+        issued_date=today.strftime("%Y-%m-%d %H:%M:%S"),
+        valid_till=valid_till.strftime("%Y-%m-%d %H:%M:%S"),
+    )   
     return "success"
 
+@api.get("/get_active_semesters")
+def get_active_semesters(request:HttpRequest):
+    sems = Semester.objects.filter(active=True)
+    active = []
+    for i in sems:
+        if(i.active):
+            active.append(i.semester)
+    return active
 
-@api.post("/edit_timings", auth=Auth())
-def edit_timings(request: HttpRequest, timings: List[ReqLunchTiming]):
-    body: List[dict] = json.loads(request.body)
 
-    timings_lst = [LunchTiming(year=i + 1, **body[i]) for i in range(0, len(body))]
-    for i in timings:
-        LunchTiming.objects.bulk_update_or_create(  # type: ignore
-            timings_lst, ["opening_time", "closing_time"], match_field="year"
-        )
+
+@api.get("/get_semester_details")
+def get_semester_details(request:HttpRequest,semester:int):
+    sem = Semester.objects.filter(semester=semester).first()
+    sem = sem.json()
+    return HttpResponse(json.dumps(sem),content_type="application/json")
+
+@api.post("/edit_semester",auth=Auth())
+def edit_semester(request: HttpRequest,semester:int):
+    data = json.loads(request.body)
+    sem = Semester.objects.filter(semester=semester).first()
+    if not sem:
+        return "No sem found!"
+        #updating details
+    sem.startDate   = data["startDate"]
+    sem.openingTimeLunch = data["openingTimeLunch"]
+    sem.closingTimeLunch = data["closingTimeLunch"]
+    sem.lateCount = data["lateCount"]
+    sem.save()
     return "success"
 
+@api.post("/promote_semester")
+def promote_semester(request, semester: int, data: PromoteSchema):
+    year_map = {1:1,2:1,3:2,4:2,5:3,6:3,7:4,8:4}
 
-@api.get("/get_timings")
-def get_timings(request: HttpRequest):
-    res = LunchTiming.objects.all()
-    res_json = [i.json() for i in res]
-    return HttpResponse(json.dumps(res_json), content_type="application/json")
+    try:
+        with transaction.atomic():
+            #Get current semester
+            sem = Semester.objects.get(semester=semester)
+            print(sem.json())
+            sem.active = False
+            sem.save()
+            print(sem.json())
 
+            # If final semester → deactivate students
+            if semester >= 8:
+                Student.objects.filter(semester=semester).update(active=False)
+                Latecomers.objects.filter(
+                semester=semester,
+            ).delete()
+                return "Success. Students of 8 Semester are Inactive."
+
+            updated_sem = semester + 1
+
+            #  Get next semester safely
+            usem = Semester.objects.filter(semester=updated_sem).first()
+            if not usem:
+                return "Next semester not found"
+
+            # FIX TIME VALIDATION
+            start = datetime.strptime(data.openingTimeLunch, "%H:%M")
+            end = datetime.strptime(data.closingTimeLunch, "%H:%M")
+
+            if start >= end:
+                return "Opening time must be less than closing time"
+
+            # Update next semester
+            print(usem.json())
+            usem.active = True
+            usem.startDate = data.startDate
+            usem.openingTimeLunch = data.openingTimeLunch
+            usem.closingTimeLunch = data.closingTimeLunch
+            usem.lateCount = data.lateCount
+            usem.save()
+            print(usem.json())
+            # Promote students
+            updated_year = year_map[updated_sem]
+
+            Student.objects.filter(semester=semester).update(
+                semester=updated_sem,
+                year=updated_year
+            )
+
+            # 7. Clean old latecomers
+            Latecomers.objects.filter(
+                semester=semester,
+                date__lt=data.startDate
+            ).delete()
+
+            IssuedPass.objects.filter(
+                semester=semester
+            ).update(active=False)
+
+            Logging.objects.filter(
+                semester = semester
+            ).delete()
+        return f"Success. Students of {semester} are promoted to {updated_sem}"
+
+    except Exception as e:
+        print("ERROR:", e)
+        return f"Error: {str(e)}"
 
 @api.get("/isvalid", auth=Auth(), response={200: Result, 404: Result})
 def is_valid(request: HttpRequest, rollno: str):
     result = Result(success=True, msg="")
-    today = datetime.today()
-    is_valid_rollno = (
-        Student.objects.filter(
-            rollno=rollno
-        ).count() > 0
-    )
-    if not is_valid_rollno:
-        result.success = False
-        result.msg = "Invalid rollno"
-        return 404, result
+    today = datetime.now()
+    try:
+        if len(rollno)!=10:
+            admn_re = r"[0-9]{2}BD[158]A[0-9]{2}[A-HJ-NP-RT-Z0-9]{2}"
+            roll_re = r"\b\d{5}\b"
+            admn = re.findall(roll_re,rollno)[0]
+            # print(admn)
+            std = Student.objects.filter(rollno=admn).first()
+        else:
+            std = Student.objects.filter(kmitrollno=rollno).first()
+            # print(std)
+        if not std:
+            result.msg="No Student Found with Specific Roll Number or Admission Number."
+            result.success=False
+            return result
+        if not std.active:
+            result.msg="The Student has been passed Out. Please verify permission and allow him!"
+            return result 
+    except Exception as e:
+        result.msg = f"Unexpected Error ! {e}"
+        result.success=False
+        return result
     resPass = IssuedPass.objects.filter(
-        roll_no=rollno, valid_till__gt=today.timestamp()
-    ).last()
+        roll_no=rollno, valid_till__gt= today.strftime("%Y-%m-%d %H:%M:%S"),active=True
+    ).order_by("-valid_till").first()
 
     if not resPass:
         result.success = False
         result.msg = "No passes found."
         return 404 ,result
-
-    timings = utlis.get_timings(
-        today.astimezone(pytz.timezone("Asia/Kolkata")),
-        utlis.roll_to_year(rollno),
-    )
-
-    if resPass.valid_till < int(today.timestamp()):
+    if resPass.valid_till < today.strftime("%Y-%m-%d %H:%M:%S"):
         result.success = False
         result.msg = "Not valid passes found."
         return result
@@ -114,13 +212,17 @@ def is_valid(request: HttpRequest, rollno: str):
     if resPass.pass_type == "alumni" or resPass.pass_type == "one_time":
         result.msg = f"Roll No. {rollno} has valid pass."
         return result
+    sem = Semester.objects.filter(semester=std.semester).first()
+    
+    open_time = datetime.strptime(sem.openingTimeLunch, "%H:%M").time()
+    close_time = datetime.strptime(sem.closingTimeLunch, "%H:%M").time()
 
+    timings = {
+    "open": datetime.combine(today.date(), open_time),
+    "close": datetime.combine(today.date(), close_time),
+    }   
 
-    if not (
-        timings["open"]
-        < today.astimezone(pytz.timezone("Asia/Kolkata"))
-        < timings["close"]
-    ):
+    if not (timings["open"] < datetime.now() < timings["close"]):
         result.success = False
         result.msg = "Not the appropriate time"
         return result
@@ -131,7 +233,7 @@ def is_valid(request: HttpRequest, rollno: str):
             result.msg = "Invalid Pass"
             return result
 
-    last_logged_time = utlis.log(roll_no=rollno)
+    last_logged_time = utlis.log(roll_no=rollno,semester=sem.semester)
     result.msg = f"Last scanned on {last_logged_time}"
     return result
 
@@ -158,19 +260,26 @@ def get_issues_passes(
     frm=None,
     to=None,
     rollno=None,
+    semester = None
 ):
     # pass_lst = None
     pass_qs = IssuedPass.objects.all()
     if frm and to:
-        from_stamp = datetime.strptime(frm, "%d-%m-%Y").timestamp()
-        to_stamp = datetime.strptime(to, "%d-%m-%Y").timestamp() + (24 * 60 * 60)
+        frmt = datetime.strptime(frm, "%Y-%m-%d").date()
+        tot = datetime.strptime(to, "%Y-%m-%d").date()
+        open_time = datetime.strptime("00:00","%H:%M").time()
+        close_time = datetime.strptime("23:59", "%H:%M").time()
+        frmtt = datetime.combine(frmt, open_time)
+        tott = datetime.combine(tot, close_time)
         pass_qs = pass_qs.filter(
-            issues_date__range=[from_stamp, to_stamp],
+            issued_date__gt=frmtt.strftime("%Y-%m-%d %H:%M:%S"),
+            issued_date__lt=tott.strftime("%Y-%m-%d %H:%M:%S")
         )
 
     if rollno:
         pass_qs = pass_qs.filter(roll_no=rollno)
-
+    if semester:
+        pass_qs = pass_qs.filter(semester=semester)
     if len(pass_qs) == 0:
         return HttpResponse("No passes found.")
 
@@ -186,8 +295,6 @@ def get_issues_passes(
                 str(list(i.json().values()))
                 .strip("[]")
                 .replace("'", "")
-                .replace(str(i.valid_till), utlis.get_local_date(i.valid_till))
-                .replace(str(i.issues_date), utlis.get_local_date(i.issues_date))
                 + "\n"
             )
         return HttpResponse(
@@ -201,8 +308,8 @@ def get_issues_passes(
 
 @api.get("/get_valid_passes")
 def get_valid_passes(request: HttpRequest):
-    today = datetime.today()
-    pass_qs = IssuedPass.objects.filter(valid_till__gt=today.timestamp())
+    today = datetime.now()
+    pass_qs = IssuedPass.objects.filter(valid_till__gt=today.strftime("%Y-%m-%d %H:%M:%S"))
     pass_json = [i.json() for i in pass_qs]
     print(pass_json)
 
@@ -211,17 +318,20 @@ def get_valid_passes(request: HttpRequest):
 
 @api.get("/get_student_data", auth=Auth(), response={200: ResStudent, 404: str})
 def get_student_data(request: HttpRequest, rollno: str):
-    res = Student.objects.filter(rollno=rollno).first()
+    res = Student.objects.filter(kmitrollno=rollno).first()
     if res == None:
         return 404, "No rollno found"
     picture_bytes = None
     try:
         if os.path.isdir("./studentImages"):
-            if not os.path.isfile(f"./studentImages/{rollno}.jpg"):
+            for ext in ["jpg", "jpeg", "png"]: 
+                if os.path.isfile(f"./studentImages/{rollno}.{ext}"):
+                    with open(f"./studentImages/{rollno}.{ext}", "rb") as img:
+                        picture_bytes = img.read()
+                    break
+            if not picture_bytes:
                 res.picture = None
                 return 200, res
-            with open(f"./studentImages/{rollno}.jpg", "rb") as img:
-                picture_bytes = img.read()
         else:
             image_res = requests.get(str(res.picture), timeout=3)
             picture_bytes = image_res.content
@@ -230,12 +340,73 @@ def get_student_data(request: HttpRequest, rollno: str):
                 return 200, res
         picture_b64 = base64.b64encode(picture_bytes)
         res.picture = picture_b64.decode()
+        print(res)
     except:  # noqa: E722
         res.picture = None
+        print(res)
 
     return 200, res
 
 @api.get("/get_scan_history")
-def get_scan_history(request: HttpRequest, ):
-    pass
+def get_scan_history(
+    request: HttpRequest,
+    ret_type="json",
+    frm=None,
+    to=None,
+    rollno=None,
+    semester = None
+):
+    # pass_lst = None
+    pass_qs = Logging.objects.all()
+    if frm and to:
+        frmt = datetime.strptime(frm, "%Y-%m-%d").date()
+        tot = datetime.strptime(to, "%Y-%m-%d").date()
+        open_time = datetime.strptime("00:00","%H:%M").time()
+        close_time = datetime.strptime("23:59", "%H:%M").time()
+        frmtt = datetime.combine(frmt, open_time)
+        tott = datetime.combine(tot, close_time)
+        pass_qs = pass_qs.filter(
+            time__gt=frmtt.strftime("%Y-%m-%d %H:%M:%S"),
+            time__lt=tott.strftime("%Y-%m-%d %H:%M:%S")
+        )
+
+    if rollno:
+        pass_qs = pass_qs.filter(roll_no=rollno)
+    if semester:
+        pass_qs = pass_qs.filter(semester=semester)
+    if len(pass_qs) == 0:
+        return HttpResponse("No passes found.")
+
+    if ret_type == "json":
+        res = [i.json() for i in pass_qs]
+        return HttpResponse(json.dumps(res), content_type="application/json")
+    if ret_type == "csv":
+        res = ""
+        for i in pass_qs:
+            if res == "":
+                res += str(list(i.json().keys())).strip("[]").replace("'", "") + "\n"
+            res += (
+                str(list(i.json().values()))
+                .strip("[]")
+                .replace("'", "")
+                + "\n"
+            )
+        return HttpResponse(
+            res,
+            content_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=scan_{int(datetime.now().timestamp())}.csv"
+            },
+        )
     
+
+from passes.models import init_students
+
+
+@api.get("")
+def home(request: HttpRequest, initdb: bool = False):
+    print(request.method)
+    if initdb:
+        init_students()
+        return HttpResponse("Database updated.")
+    return HttpResponse("hello world")

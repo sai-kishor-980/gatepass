@@ -30,6 +30,8 @@ import sys
 from setlunchtime import *
 from gethistory import *
 from getlatecomers import *
+from promotesemester import *
+from editsemester import *
 from srvrcfg import SERVERURL, headers, TIMEOUT
 
 BASE_DIR = None
@@ -144,11 +146,31 @@ class MainWin(QMainWindow):
 
     @pyqtSlot(dict)
     def updateUI(self, student_details) -> None:
-        self.PassType.model().item(2).setEnabled(int(student_details["year"]) == 4)
+        model = self.PassType.model()
+        year = int(student_details["year"])
+        active = student_details["active"]
+        is_friday = DATE.weekday() == 4
 
-        self.details.setText(
-            f"##### Name:\n### {student_details['name']}\n---\n#### Section: {student_details['dept']}-{student_details['section']}\n#### Year: {student_details['year']}\n"
-        )
+        for i in range(model.rowCount()):
+            model.item(i).setEnabled(False)
+
+        if not active:
+            model.item(2).setEnabled(True) 
+        else:
+            model.item(0).setEnabled(True)  
+            model.item(1).setEnabled(True)  
+            if is_friday:
+                model.item(3).setEnabled(True)  
+            if year == 4:
+                model.item(2).setEnabled(True) 
+        if active:
+            self.details.setText(
+            f"##### Name:\n### {student_details['name']}\n---\n#### Section: {student_details['dept']}-{student_details['section']}\n#### Year: {student_details['year']}\n#### Semester: {student_details['semester']}"
+            )
+        else:
+            self.details.setText(
+            f"##### Name:\n### {student_details['name']}\n---\n#### Section: {student_details['dept']}-{student_details['section']}\n#### Year: {student_details['year']}\n#### Passed Out Student"
+            )
         self.details.setStyleSheet("color: #000")
         self.details.setAlignment(
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
@@ -162,10 +184,12 @@ class MainWin(QMainWindow):
 
     def setupOptions(self):
         settingsMenu = QMenu(self)
-        settingsMenu.addAction("Set Lunch time", self.setLunchTime)
+        # settingsMenu.addAction("Set Lunch time", self.setLunchTime)
         settingsMenu.addAction("Issue History", self.dlGenerationHistory)
         settingsMenu.addAction("Scan History", self.dlScanningHistory)
         settingsMenu.addAction("Latecomers data", self.getLatecomersData)
+        settingsMenu.addAction("Promote Semester",self.promoteSemester)
+        settingsMenu.addAction("Edit Semester Details",self.updateSemester)
 
         self.Tools.setMenu(settingsMenu)
         self.Tools.setDefaultAction(QAction(self))
@@ -175,33 +199,45 @@ class MainWin(QMainWindow):
         self.Tools.setIcon(icon)
         self.Tools.setText(None)
 
-    def setLunchTime(self):
-        self.status.setText("Modifying Lunch Time")
-        dlg = LunchTimeDialog(self)
+    # def setLunchTime(self):
+    #     self.status.setText("Modifying Lunch Time")
+    #     dlg = LunchTimeDialog(self)
 
-        if dlg.error:
-            del dlg
-            return
+    #     if dlg.error:
+    #         del dlg
+    #         return
 
-        dlg.show()
-        self.status.setText("Waiting...")
+    #     dlg.show()
+    #     self.status.setText("Waiting...")
 
     def dlGenerationHistory(self):
         self.status.setText("Downloading Pass Issue History")
-        dlg = GetHistoryDialog(self, "Issue")
-        dlg.show()
+        self.dlg_his = GetHistoryDialog(self, "Issue")
+        self.dlg_his.show()
         self.status.setText("Waiting...")
 
     def dlScanningHistory(self):
         self.status.setText("Downloading Pass Scan History")
-        dlg = GetHistoryDialog(self, "Scan")
-        dlg.show()
+        self.dlg_scan = GetHistoryDialog(self, "Scan")
+        self.dlg_scan.show()
         self.status.setText("Waiting...")
 
     def getLatecomersData(self):
         self.status.setText("Downloading Latecomers data")
-        dlg = GetLatecomersDialog(self)
-        dlg.show()
+        self.dlg_l = GetLatecomersDialog(self)
+        self.dlg_l.show()
+        self.status.setText("Waiting...")
+    
+    def promoteSemester(self):
+        self.status.setText("Details to Promote Semester : ")
+        self.dlg_ps = SemPromoteDialog(self)
+        self.dlg_ps.show()
+        self.status.setText("Waiting...")
+
+    def updateSemester(self):
+        self.status.setText("Updating Semester Details")
+        self.dlg_us = EditSemesterDia(self)
+        self.dlg_us.show()
         self.status.setText("Waiting...")
 
     def _SetImg(

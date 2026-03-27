@@ -16,9 +16,7 @@ Including another URLconf
 """
 from django.contrib import admin
 from django.urls import path, include
-from server.views import (
-    home,
-)  # https://docs.djangoproject.com/en/4.2/howto/static-files/
+ # https://docs.djangoproject.com/en/4.2/howto/static-files/
 
 STATIC_URL = "static/"
 
@@ -30,7 +28,7 @@ DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("", home),
+    # path("home/",api.urls),
     path("", include("passes.urls")),
     path("latecomers/", include("latecomers.urls")),
 ]

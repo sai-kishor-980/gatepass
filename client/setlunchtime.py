@@ -15,7 +15,7 @@ from datetime import datetime
 from typing import List
 from requests import get as urlget, post as urlpost, ConnectionError, Timeout
 
-from srvrcfg import SERVERURL, headers, TIMEOUT
+from srvrcfg import SERVERURL, headers
 
 
 class LunchTimeDialog(QDialog):
