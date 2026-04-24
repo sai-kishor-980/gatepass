@@ -58,7 +58,8 @@ def rem_latecomers(request: HttpRequest):
             # print(lateCount)
             if todayCount == 0:
                 if lateCount >=limit:
-                    result.msg = f"Student reached the limit of {limit} Late Entries."
+                    result.msg = f"Student reached the limit of {limit} Late Entries.\nPrevious Late Entries are {lateCount}"
+                    Latecomers.objects.create(roll_no=std.kmitrollno, date=today,semester=std.semester)
                     result.success = False
                     return result
                 Latecomers.objects.create(roll_no=std.kmitrollno, date=today,semester=std.semester)

@@ -3,9 +3,12 @@ from sys import argv, exit, executable
 from re import fullmatch
 from requests import get as urlget, post as urlpost
 from datetime import date
+from PyQt5.QtWidgets import QAction
+from activate_first_sem import ActivateFirstSemDialog
 
-# from json import load as loadjson
 from base64 import b64decode as b64d, b64encode as b64e
+from PyQt5.QtWidgets import QDialog, QMessageBox
+from requests import post as urlpost, get as urlget, ConnectionError, Timeout
 
 from PyQt5.QtWidgets import (
     QApplication,
@@ -27,7 +30,7 @@ from PyQt5.QtCore import pyqtSlot, QObject, QThread
 
 import sys
 
-from setlunchtime import *
+from upload import *
 from gethistory import *
 from getlatecomers import *
 from promotesemester import *
@@ -85,6 +88,66 @@ class MainWin(QMainWindow):
 
         self.setupOptions()
         self.setupUI()
+    
+    def activateFirstSemester(self):
+
+        self.status.setText("Checking Semester 1 Status...")
+
+        try:
+            res = urlget(
+                f"{SERVERURL}/check_first_semester",
+                timeout=TIMEOUT
+            )
+            data = res.json()
+
+        except (ConnectionError, Timeout):
+            self.error("Connection Error!\nCheck Connection & Try again.")
+            self.status.setText("Connection Error")
+            return
+
+        # Already active
+        if data["active"] == True:
+            self.warning("1st Semester is already active.")
+            self.status.setText("Already Active")
+            return
+
+        # Ask confirmation
+        reply = QMessageBox.question(
+            self,
+            "Confirm Activation",
+            "Are you sure you want to Activate 1st Semester?",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No
+        )
+
+        if reply == QMessageBox.No:
+            self.status.setText("Cancelled")
+            return
+
+        # Activate
+        self.status.setText("Activating 1st Semester...")
+
+        try:
+            res = urlpost(
+                f"{SERVERURL}/activate_first_semester",
+                headers=headers,
+                timeout=TIMEOUT
+            )
+
+            result = res.text.strip()
+
+        except (ConnectionError, Timeout):
+            self.error("Connection Error!\nCheck Connection & Try again.")
+            self.status.setText("Connection Error")
+            return
+
+        if res.status_code == 200:
+            self.success(result)
+            self.status.setText("Done")
+        else:
+            self.error(result)
+            self.status.setText("Error")
+
 
     def setupUI(self, rno: str = "") -> bool:
         if not fullmatch("[0-9]{2}BD[158]A[0-9]{2}[A-HJ-NP-RT-Z0-9]{2}", rno):
@@ -194,6 +257,10 @@ class MainWin(QMainWindow):
         self.scanHistoryAction.triggered.connect(self.dlScanningHistory)
         settingsMenu.addAction(self.scanHistoryAction)
         
+        self.uploadAction = QAction("Upload Data",self)
+        self.uploadAction.triggered.connect(self.uploadStudents)
+        settingsMenu.addAction(self.uploadAction)
+
         self.getLateAction = QAction("Get Latecomers Data",self)
         self.getLateAction.triggered.connect(self.getLatecomersData)
         settingsMenu.addAction(self.getLateAction)
@@ -205,6 +272,24 @@ class MainWin(QMainWindow):
         self.updateAction = QAction("Edit Semester Details",self)
         self.updateAction.triggered.connect(self.updateSemester)
         settingsMenu.addAction(self.updateAction)
+
+        
+        self.activateFirstAction = QAction(
+            "Activate 1st Semester",
+            self
+        )
+
+        self.activateFirstAction.triggered.connect(
+            self.openActivateFirstSemester
+        )
+
+        settingsMenu.addAction(
+            self.activateFirstAction
+        )
+
+
+        
+
 
         self.Tools.setMenu(settingsMenu)
         self.Tools.setDefaultAction(QAction(self))
@@ -230,6 +315,59 @@ class MainWin(QMainWindow):
         self.dlg_his = GetHistoryDialog(self, "Issue")
         self.dlg_his.show()
         self.status.setText("Waiting...")
+    
+    def openActivateFirstSemester(self):
+
+        try:
+            res = urlget(
+                SERVERURL + "/check_first_semester",
+                timeout=TIMEOUT
+            )
+
+            data = res.json()
+
+            # ----------------------------------
+            # If already active -> ask edit?
+            # ----------------------------------
+            if data["active"] == True:
+
+                reply = QMessageBox.question(
+                    self,
+                    "Already Active",
+                    "1st Semester is already active.\n\n"
+                    "Do you want to edit details?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+
+                if reply == QMessageBox.Yes:
+                    dlg = ActivateFirstSemDialog(
+                        self,
+                        edit_mode=True
+                    )
+                    dlg.exec_()
+
+                return
+
+            # ----------------------------------
+            # If not active -> Activate mode
+            # ----------------------------------
+            dlg = ActivateFirstSemDialog(
+                self,
+                edit_mode=False
+            )
+
+            dlg.exec_()
+
+        except:
+            self.error("Connection Error!")
+
+
+    def uploadStudents(self):
+        self.status.setText("Upload Students Data!")
+        self.upload = UploadDialog(self)
+        self.upload.show()
+        self.status.setText("Waiting for data!")
 
     def dlScanningHistory(self):
         self.status.setText("Downloading Pass Scan History")

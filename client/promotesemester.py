@@ -125,22 +125,47 @@ class SemPromoteDialog(QDialog):
             self.getSemesterDetails()
 
     def promoteSemester(self):
-        if self.SelectYear.currentIndex()<0:
+        if self.SelectYear.currentIndex() < 0:
             self.parent().error("No Semester Selected!.")
-            self.parent().status.setText("Please select a semester")
             return
+
         semester = int(self.SelectYear.currentText())
         data = {}
+
+        # ✅ HANDLE SEM 8 SEPARATELY
+        if semester == 8:
+            try:
+                res = urlpost(
+                    f"{SERVERURL}/promote_semester?semester={semester}",
+                    headers=headers,
+                    timeout=TIMEOUT,
+                )
+            except (ConnectionError, Timeout):
+                self.parent().error("Connection Error!")
+                return
+
+            result = res.content.decode()
+            if "Success" in result:
+                self.parent().success(result)
+                self.close()
+            else:
+                self.parent().error(result)
+            return   # 🚨 IMPORTANT: STOP HERE
+
+        # ✅ NORMAL FLOW (sem < 8)
         data["startDate"] = self.startDate.date().toString("yyyy-MM-dd")
         data["openingTimeLunch"] = self.start.time().toString("HH:mm")
         data["closingTimeLunch"] = self.end.time().toString("HH:mm")
+
         start = datetime.strptime(data["openingTimeLunch"], "%H:%M")
         end = datetime.strptime(data["closingTimeLunch"], "%H:%M")
+
         if start >= end:
             self.parent().error("Closing Time must be greater than Opening Time")
-            self.parent().status.setText("Check the Timings")
             return
+
         data["lateCount"] = self.count.value()
+
         try:
             res = urlpost(
                 f"{SERVERURL}/promote_semester?semester={semester}",
@@ -149,17 +174,15 @@ class SemPromoteDialog(QDialog):
                 timeout=TIMEOUT,
             )
         except (ConnectionError, Timeout):
-            self.parent().error("Connection Error!\nCheck Connection & Try again.")
-            self.parent().status.setText("Connection Error.")
+            self.parent().error("Connection Error!")
             return
-        result = res.content.decode()
 
+        result = res.content.decode()
         if "Success" in result:
             self.parent().success(result)
             self.close()
         else:
-            self.parent().status.setText("Unexpected Error.")
-            self.parent().error(f"Unexpected Error. {res.content.decode()}")
+            self.parent().error(result)
         
         
     def getSemesterDetails(self):

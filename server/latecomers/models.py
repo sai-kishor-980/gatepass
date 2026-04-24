@@ -9,7 +9,9 @@ class Latecomers(models.Model):
         return {"roll_no": self.roll_no, "semester":self.semester,"date": self.date}
 
     class Meta:
+        unique_together = ('roll_no', 'date')
         db_table = "latecomers"
+        
 
 
 from ninja import Schema

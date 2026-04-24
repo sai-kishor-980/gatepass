@@ -5,7 +5,7 @@ import json
 from datetime import datetime
 
 class Semester(models.Model):
-    semester = models.IntegerField()
+    semester = models.IntegerField(primary_key=True)
     startDate = models.CharField(max_length=25)
     lateCount = models.IntegerField()
     openingTimeLunch = models.CharField(max_length=10)
@@ -54,7 +54,7 @@ class IssuedPass(models.Model):
 
 class Student(models.Model):
     rollno = models.CharField(max_length=11)    # admn no 
-    kmitrollno = models.CharField(max_length=11) # hall ticket number
+    kmitrollno = models.CharField(max_length=11,primary_key=True) # hall ticket number
     name = models.CharField(max_length=100)
     year = models.CharField(max_length=2, default="-1")
     semester = models.CharField(max_length=2,default="1")

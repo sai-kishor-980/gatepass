@@ -3,7 +3,8 @@ import json
 import base64
 
 from django.http import HttpResponse, HttpRequest
-from ninja import NinjaAPI
+from django.conf import settings    
+from ninja import NinjaAPI,File
 from passes.models import (
     ReqPass,
     IssuedPass,
@@ -22,13 +23,35 @@ from dateutil.relativedelta import relativedelta
 import pytz
 from typing import List
 import requests
+from ninja import File
+from ninja.files import UploadedFile
 from latecomers.models import Latecomers
 from passes import utlis
 from server.utlis import Auth
 
 from django.db import transaction
 
+from ninja import Schema
+from django.http import HttpRequest
+
+class ActivateSchema(Schema):
+    startDate: str
+    openingTimeLunch: str
+    closingTimeLunch: str
+    lateCount: int
+
+
 api = NinjaAPI(urls_namespace="passes",version="2.0.0")
+
+@api.get("/check_first_semester")
+def check_first_semester(request: HttpRequest):
+
+    sem = Semester.objects.filter(semester=1).first()
+
+    if not sem:
+        return {"active": False}
+
+    return {"active": sem.active}
 
 
 @api.post("/gen_pass", auth=Auth())
@@ -100,25 +123,24 @@ def edit_semester(request: HttpRequest,semester:int):
     sem.save()
     return "success"
 
+from typing import Optional
 @api.post("/promote_semester")
-def promote_semester(request, semester: int, data: PromoteSchema):
+def promote_semester(request, semester: int, data: Optional[PromoteSchema] = None):
     year_map = {1:1,2:1,3:2,4:2,5:3,6:3,7:4,8:4}
 
     try:
         with transaction.atomic():
             #Get current semester
             sem = Semester.objects.get(semester=semester)
-            print(sem.json())
+            # print(sem.json())
             sem.active = False
             sem.save()
-            print(sem.json())
+            # print(sem.json())
 
             # If final semester → deactivate students
             if semester >= 8:
                 Student.objects.filter(semester=semester).update(active=False)
-                Latecomers.objects.filter(
-                semester=semester,
-            ).delete()
+                Latecomers.objects.filter(semester=semester).delete()
                 return "Success. Students of 8 Semester are Inactive."
 
             updated_sem = semester + 1
@@ -136,14 +158,14 @@ def promote_semester(request, semester: int, data: PromoteSchema):
                 return "Opening time must be less than closing time"
 
             # Update next semester
-            print(usem.json())
+            # print(usem.json())
             usem.active = True
             usem.startDate = data.startDate
             usem.openingTimeLunch = data.openingTimeLunch
             usem.closingTimeLunch = data.closingTimeLunch
             usem.lateCount = data.lateCount
             usem.save()
-            print(usem.json())
+            # print(usem.json())
             # Promote students
             updated_year = year_map[updated_sem]
 
@@ -176,7 +198,7 @@ def is_valid(request: HttpRequest, rollno: str):
     result = Result(success=True, msg="")
     today = datetime.now()
     try:
-        print(1)
+        # print(1)
         if len(rollno)!=10:
             admn_re = r"[0-9]{2}BD[158]A[0-9]{2}[A-HJ-NP-RT-Z0-9]{2}"
             roll_re = r"\b\d{5}\b"
@@ -341,10 +363,10 @@ def get_student_data(request: HttpRequest, rollno: str):
                 return 200, res
         picture_b64 = base64.b64encode(picture_bytes)
         res.picture = picture_b64.decode()
-        print(res)
+        # print(res)
     except:  # noqa: E722
         res.picture = None
-        print(res)
+        # print(res)
 
     return 200, res
 
@@ -399,7 +421,11 @@ def get_scan_history(
                 "Content-Disposition": f"attachment; filename=scan_{int(datetime.now().timestamp())}.csv"
             },
         )
-    
+
+from ninja import Form
+
+
+
 
 from passes.models import init_students
 
@@ -410,4 +436,372 @@ def home(request: HttpRequest, initdb: bool = False):
     if initdb:
         init_students()
         return HttpResponse("Database updated.")
-    return HttpResponse("hello world")
+    return HttpResponse("Welcome to the Hosting Server of GARUDA (Late Pass)")
+
+
+
+# BACKEND : replace your existing /upload_data API with this
+
+from ninja import Form, File
+from ninja.files import UploadedFile
+from typing import List
+from django.conf import settings
+from django.db import transaction
+import json
+import os
+
+
+@api.post("/upload_data")
+def upload_students(
+    request,
+
+    # json string from frontend
+    students: str = Form(...),
+
+    # Upload / Update
+    mode: str = Form(...),
+
+    # only for Upload mode
+    admission_type: str = Form(""),
+
+    # only for Update mode
+    semester: str = Form(""),
+
+    # optional images
+    images: List[UploadedFile] = File(None)
+):
+
+    # ========================================================
+    # STEP 1 : READ STUDENT JSON
+    # ========================================================
+    try:
+        students_data = json.loads(students)
+
+    except Exception:
+        return {
+            "success": False,
+            "message": "Invalid JSON Data"
+        }
+
+    # ========================================================
+    # STEP 2 : CREATE ROLL -> DATA MAP
+    # ========================================================
+    student_map = {
+        str(i["Roll No."]).strip(): i
+        for i in students_data
+    }
+
+    # ========================================================
+    # STEP 3 : CREATE IMAGE MAP
+    # rollno -> uploaded image
+    # ========================================================
+    image_map = {}
+
+    if images:
+        for img in images:
+            roll = img.name.split(".")[0].strip()
+            image_map[roll] = img
+
+    # ========================================================
+    # STEP 4 : SAVE DIRECTORY
+    # ========================================================
+    save_dir = settings.MEDIA_ROOT
+    os.makedirs(save_dir, exist_ok=True)
+
+    # ========================================================
+    # STEP 5 : RESULT LISTS
+    # ========================================================
+    created = []
+    updated = []
+    failed = []
+
+    # ========================================================
+    # STEP 6 : UPLOAD MODE MAPPING
+    # ========================================================
+    # only for new intake
+    upload_map = {
+        "1st Year Regular": {
+            "year": "1",
+            "semester": "1"
+        },
+
+        "2nd Year LE": {
+            "year": "2",
+            "semester": "3"
+        }
+    }
+
+    # ========================================================
+    # STEP 7 : MAIN LOOP
+    # ========================================================
+    for roll, data in student_map.items():
+
+        try:
+            with transaction.atomic():
+
+                # ------------------------------------------------
+                # CHECK EXISTING STUDENT
+                # ------------------------------------------------
+                student = Student.objects.filter(
+                    kmitrollno=roll
+                ).first()
+
+                # =================================================
+                # MODE = UPLOAD
+                # =================================================
+                if mode == "Upload":
+
+                    # --------------------------------------------
+                    # duplicate student not allowed
+                    # --------------------------------------------
+                    if student:
+                        failed.append(
+                            f"{roll} -> Already Exists"
+                        )
+                        continue
+
+                    # --------------------------------------------
+                    # image compulsory in upload mode
+                    # --------------------------------------------
+                    if roll not in image_map:
+                        failed.append(
+                            f"{roll} -> No Image Uploaded"
+                        )
+                        continue
+
+                    # --------------------------------------------
+                    # get mapping
+                    # --------------------------------------------
+                    if admission_type not in upload_map:
+                        failed.append(
+                            f"{roll} -> Invalid Admission Type"
+                        )
+                        continue
+
+                    year = upload_map[
+                        admission_type
+                    ]["year"]
+
+                    sem = upload_map[
+                        admission_type
+                    ]["semester"]
+
+                    # --------------------------------------------
+                    # save image
+                    # --------------------------------------------
+                    img = image_map[roll]
+
+                    file_path = os.path.join(
+                        save_dir,
+                        img.name
+                    )
+
+                    with open(file_path, "wb+") as f:
+                        for chunk in img.chunks():
+                            f.write(chunk)
+
+                    # --------------------------------------------
+                    # create student
+                    # --------------------------------------------
+                    Student.objects.create(
+
+                        # hallticket
+                        kmitrollno=roll,
+
+                        # admission no
+                        rollno=str(
+                            data.get("Adm. No.", "")
+                        ).strip(),
+
+                        name=str(
+                            data.get(
+                                "Name of the Student",
+                                ""
+                            )
+                        ).strip(),
+
+                        section=str(
+                            data.get("Sec", "")
+                        ).strip(),
+
+                        dept=str(
+                            data.get(
+                                "Department",
+                                ""
+                            )
+                        ).strip(),
+
+                        year=year,
+                        semester=sem,
+
+                        picture=img.name,
+
+                        active=True
+                    )
+
+                    created.append(roll)
+
+                # =================================================
+                # MODE = UPDATE
+                # =================================================
+                elif mode == "Update":
+
+                    # --------------------------------------------
+                    # student must exist
+                    # --------------------------------------------
+                    if not student:
+                        failed.append(
+                            f"{roll} -> Not Found"
+                        )
+                        continue
+
+                    # --------------------------------------------
+                    # only selected semester students
+                    # --------------------------------------------
+                    if str(student.semester) != str(semester):
+                        failed.append(
+                            f"{roll} -> Not in Semester {semester}"
+                        )
+                        continue
+
+                    # --------------------------------------------
+                    # update fields
+                    # --------------------------------------------
+                    student.rollno = str(
+                        data.get("Adm. No.", "")
+                    ).strip()
+
+                    student.name = str(
+                        data.get(
+                            "Name of the Student",
+                            ""
+                        )
+                    ).strip()
+
+                    student.section = str(
+                        data.get("Sec", "")
+                    ).strip()
+
+                    student.dept = str(
+                        data.get(
+                            "Department",
+                            ""
+                        )
+                    ).strip()
+
+                    # --------------------------------------------
+                    # image optional in update mode
+                    # if uploaded -> replace
+                    # else keep old image
+                    # --------------------------------------------
+                    if roll in image_map:
+
+                        img = image_map[roll]
+
+                        file_path = os.path.join(
+                            save_dir,
+                            img.name
+                        )
+
+                        with open(file_path, "wb+") as f:
+                            for chunk in img.chunks():
+                                f.write(chunk)
+
+                        student.picture = img.name
+
+                    student.save()
+
+                    updated.append(roll)
+
+                # =================================================
+                # INVALID MODE
+                # =================================================
+                else:
+                    failed.append(
+                        f"{roll} -> Invalid Mode"
+                    )
+
+        except Exception as e:
+
+            failed.append(
+                f"{roll} -> {str(e)}"
+            )
+
+    # ========================================================
+    # STEP 8 : SUMMARY
+    # ========================================================
+    summary = {
+        "total": len(student_map),
+        "created": len(created),
+        "updated": len(updated),
+        "failed": len(failed)
+    }
+
+    # ========================================================
+    # STEP 9 : FINAL RESPONSE
+    # ========================================================
+    return {
+        "success": True,
+        "created": created,
+        "updated": updated,
+        "failed": failed,
+        "summary": summary
+    }
+
+
+
+
+# ==========================================
+# ADD THIS IN passes/views.py
+# ==========================================
+
+from django.http import HttpRequest
+
+
+# ------------------------------------------
+# CHECK WHETHER 1ST SEMESTER ACTIVE OR NOT
+# ------------------------------------------
+@api.get("/check_first_semester")
+def check_first_semester(request: HttpRequest):
+
+    sem = Semester.objects.filter(semester=1).first()
+
+    # If no record found
+    if not sem:
+        return {
+            "active": False,
+            "message": "Semester 1 not found"
+        }
+
+    return {
+        "active": sem.active
+    }
+
+
+# ------------------------------------------
+# ACTIVATE 1ST SEMESTER
+# ------------------------------------------
+@api.post("/activate_first_semester", auth=Auth())
+def activate_first_semester(
+    request: HttpRequest,
+    data: ActivateSchema
+):
+
+    sem = Semester.objects.filter(semester=1).first()
+
+    if not sem:
+        return "Semester 1 not found."
+
+    if sem.active:
+        return "1st Semester already active."
+
+    sem.active = True
+    sem.startDate = data.startDate
+    sem.openingTimeLunch = data.openingTimeLunch
+    sem.closingTimeLunch = data.closingTimeLunch
+    sem.lateCount = data.lateCount
+
+    sem.save()
+
+    return "1st Semester Activated Successfully."
+
